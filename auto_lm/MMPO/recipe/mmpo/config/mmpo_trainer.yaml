@@ -1,0 +1,41 @@
+# recipe/mmpo/config/mmpo_trainer.yaml
+# The MMPO config overrides default verl ppo_trainer.yaml.
+
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+algorithm:
+  adv_estimator: mmpo
+  dmpo:
+    enabled: false
+    matching_weight: 2.0
+    temperature: 0.06666666666666667
+    group_size: 8
+  fb:
+    enabled: false
+    k_train: 8
+    failure_ema_beta: 0.5
+    eval_posterior_draws: 0
+    eval_seed: 42
+    weight_mode: lagged
+    weight_temperature: 1.0
+    freeze_failure_updates: false
+    mechanism_log: false
+    checkpoint_io_gate: false
+    eval_posterior_seed: null
+    train_decoding_seed: null
+  mmpo:
+    unbiased: true
+    T: 4
+  
+actor_rollout_ref:
+  rollout:
+    val_kwargs:
+      temperature: 0.6
+      top_p: 0.95
+      do_sample: true

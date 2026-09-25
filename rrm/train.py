@@ -15,10 +15,10 @@ import yaml
 from torch import Tensor, nn
 from torch.optim import Optimizer
 
-from rrm.fenchel_bregman import (
+from rrm.fbi import (
+    FBI,
     FenchelBregmanConfig,
     FailureProbabilityTracker,
-    fenchel_bregman_objective,
     price_anchored_curvature_gradient,
     should_refresh_curvature,
 )
@@ -268,7 +268,7 @@ def compute_training_loss(
     if tracker.beta != fb_config.tracker_beta:
         raise ValueError("Fenchel--Bregman tracker beta differs from config")
     failure_probability = tracker.values_for(group_ids)
-    fb = fenchel_bregman_objective(
+    fb = FBI.objective(
         task_loss, failure_probability, config=fb_config
     )
     if update_tracker:

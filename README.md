@@ -1,15 +1,19 @@
-# Posterior-decision Reasoning
+# Fenchel-Bregman IVON
 
 ## Code layout
 
 ```text
 variational_reasoning/
+├── fb.py                      # shared finite-K FB weighting and failure EMA
 ├── optim/                     # IVON and optional experimental optimizers
+├── auto_lm/                   # autoregressive FBI reproduction
+│   └── fbi.py                  # autoregressive FBI objective and failure state
 └── rrm/
     ├── fprm.py                # fixed-point reasoning model
     ├── ptrm.py                # TRM and PTRM model
     ├── gram.py                # GRAM model
-    ├── fenchel_bregman.py     # Fenchel-Bregman objective
+    ├── fbi.py                 # recursive-reasoning FBI objective and tracker
+    ├── fenchel_bregman.py     # compatibility import for the previous API
     ├── train.py               # training entry point
     ├── evaluation.py          # evaluation and aggregation entry point
     ├── arc.py                 # ARC-AGI data, voting, and evaluation entry point
@@ -17,7 +21,9 @@ variational_reasoning/
     └── sh/                    # Table 1 and ARC-AGI launchers
 ```
 
-The FPRM implementation follows [`nilskiKonjIzDunava/fprm`](https://github.com/nilskiKonjIzDunava/fprm). The TRM and PTRM code follows [`SamsungSAILMontreal/TinyRecursiveModels`](https://github.com/SamsungSAILMontreal/TinyRecursiveModels).
+The FPRM implementation follows [`nilskiKonjIzDunava/fprm`](https://github.com/nilskiKonjIzDunava/fprm).
+The TRM and PTRM code follows [`SamsungSAILMontreal/TinyRecursiveModels`](https://github.com/SamsungSAILMontreal/TinyRecursiveModels).
+The autoregressive FBI training and evaluation commands are in [`auto_lm/README.md`](auto_lm/README.md).
 
 ## Installation
 
