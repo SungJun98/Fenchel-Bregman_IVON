@@ -3,11 +3,18 @@
 ## Code layout
 
 ```text
-variational_reasoning/
+Fenchel-Bregman_IVON/
 ├── fb.py                      # shared finite-K FB weighting and failure EMA
-├── optim/                     # IVON and optional experimental optimizers
-├── auto_lm/                   # autoregressive FBI reproduction
-│   └── fbi.py                  # autoregressive FBI objective and failure state
+├── optim/
+│   ├── ivon.py                # recursive-reasoning IVON adapter
+│   └── fbi_ivon.py            # autoregressive-LM IVON implementation
+├── auto_lm/
+│   ├── fbi.py                 # autoregressive FBI objective and failure state
+│   ├── run.py                 # training and posterior-evaluation entry point
+│   ├── build_base_eval_suite.py
+│   ├── prepare_generation_parquet.py
+│   ├── aggregate_pass_at_k.py
+│   └── MMPO/                  # vendored MMPO/verl runtime
 └── rrm/
     ├── fprm.py                # fixed-point reasoning model
     ├── ptrm.py                # TRM and PTRM model
@@ -18,14 +25,14 @@ variational_reasoning/
     ├── evaluation.py          # evaluation and aggregation entry point
     ├── arc.py                 # ARC-AGI data, voting, and evaluation entry point
     ├── utils.py               # data and checkpoint utilities
-    └── sh/                    # Table 1 and ARC-AGI launchers
+    └── sh/                    # launchers
 ```
 
 The FPRM implementation follows [`nilskiKonjIzDunava/fprm`](https://github.com/nilskiKonjIzDunava/fprm).
 The TRM and PTRM code follows [`SamsungSAILMontreal/TinyRecursiveModels`](https://github.com/SamsungSAILMontreal/TinyRecursiveModels).
-The autoregressive FBI training and evaluation commands are in [`auto_lm/README.md`](auto_lm/README.md).
+The autoregressive LM workflow is described [below](#autoregressive-lm-reproduction) and in the [detailed guide](auto_lm/README.md).
 
-## Installation
+## Recursive reasoning installation
 
 Create a CUDA-enabled PyTorch environment and install the dependencies:
 
@@ -35,7 +42,8 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
 Each launcher reads a preprocessed dataset directory from `DATASET`.
-Evaluation checkpoints come from `CHECKPOINT`. FPRM checkpoints require the released `all_config.yaml` in the same directory as the checkpoint.
+Evaluation checkpoints come from `CHECKPOINT`.
+FPRM checkpoints require the released `all_config.yaml` in the same directory as the checkpoint.
 Download public FPRM files from [`fixed-point-reasoners/fprm`](https://huggingface.co/fixed-point-reasoners/fprm).
 
 ## Table 1 launchers
@@ -107,6 +115,69 @@ The sharded launchers process shards in sequence on `DEVICE`.
 They preserve the paper's shard boundaries and sampling resets without managing several GPU processes in shell.
 Single runs write `evaluation/metrics.json`.
 Sharded runs write `evaluation/aggregate/metrics.json`.
-
-
 Each run records the measured selected accuracy and Pass@K in its output directory.
+
+## Autoregressive LM reproduction
+
+The Qwen3-4B-Base experiment uses the shared FB finite-K weighting and failure EMA in `fb.py`, the LM-specific FBI state in `auto_lm/fbi.py`, and posterior sampling from `optim/fbi_ivon.py`.
+The `auto_lm/MMPO/` directory contains the MMPO/verl runtime adapted for this experiment.
+The model, datasets, checkpoints, and generated outputs are external to this repository.
+
+Use a separate CUDA environment with PyTorch, Ray, vLLM, and eight GPUs in total, either on one machine or across two four-GPU nodes.
+Run the following commands from the repository root, and make the same repository and external input paths available on every Ray node.
+
+```bash
+python -m pip install -r auto_lm/MMPO/requirements.txt
+python -m pip install -e 'auto_lm/MMPO[vllm]'
+```
+
+The training data and evaluation JSONL files come from MMPO commit `0ca3087f5eda8ebbd9dbe3a73bb5170eb99d2e2d`.
+Set the paths below to external locations and supply a local Qwen3-4B-Base model directory.
+
+```bash
+DATA_ROOT=/absolute/path/to/data
+RUN_ROOT=/absolute/path/to/runs
+MODEL_PATH=/absolute/path/to/Qwen3-4B-Base
+mkdir -p "$DATA_ROOT" "$RUN_ROOT"
+git clone https://github.com/e3trange/MMPO.git "$DATA_ROOT/MMPO"
+git -C "$DATA_ROOT/MMPO" checkout 0ca3087f5eda8ebbd9dbe3a73bb5170eb99d2e2d
+TRAIN_FILE="$DATA_ROOT/MMPO/data/train.parquet"
+EVAL_ROOT="$DATA_ROOT/MMPO/data/eval"
+```
+
+The training parquet must retain `data_source` and `extra_info.index` as stable problem identifiers for the FBI failure tracker.
+The evaluation helpers combine MATH500, Olympiad-math, AMC23, AIME2024, and AIME2025 into a fixed Base suite and prepare the parquet used by the generator.
+
+```bash
+python auto_lm/build_base_eval_suite.py \
+  --eval-root "$EVAL_ROOT" --output-dir "$RUN_ROOT/eval_suite" \
+  --source-commit 0ca3087f5eda8ebbd9dbe3a73bb5170eb99d2e2d
+python auto_lm/prepare_generation_parquet.py \
+  --source "$RUN_ROOT/eval_suite/base_eval.jsonl" \
+  --output "$RUN_ROOT/eval_suite/eval.parquet"
+```
+
+Stage 1 trains with lagged finite-K weights; stage 2 resumes its step-200 checkpoint and trains with normalized weights through step 300.
+The example below assumes a running Ray cluster reachable through `RAY_ADDRESS`; use `auto` when launching on its head node.
+On a single eight-GPU machine, replace each `--ray-address "$RAY_ADDRESS"` with `--nodes 1 --gpus-per-node 8`.
+
+```bash
+RAY_ADDRESS=auto
+python auto_lm/run.py train --stage 1 \
+  --model "$MODEL_PATH" --train-file "$TRAIN_FILE" \
+  --output "$RUN_ROOT/stage1" --ray-address "$RAY_ADDRESS"
+python auto_lm/run.py train --stage 2 \
+  --model "$MODEL_PATH" --train-file "$TRAIN_FILE" \
+  --checkpoint "$RUN_ROOT/stage1/global_step_200" \
+  --output "$RUN_ROOT/stage2" --ray-address "$RAY_ADDRESS"
+python auto_lm/run.py eval \
+  --model "$MODEL_PATH" --train-file "$TRAIN_FILE" \
+  --checkpoint "$RUN_ROOT/stage2/global_step_300" \
+  --eval-file "$RUN_ROOT/eval_suite/eval.parquet" \
+  --manifest "$RUN_ROOT/eval_suite/base_eval_manifest.json" \
+  --output "$RUN_ROOT/evaluation" --ray-address "$RAY_ADDRESS"
+```
+
+Evaluation draws sixteen independent IVON posterior samples, scores answers with Math-Verify, and writes `evaluation/metrics.json` and `evaluation/candidates.jsonl` with Pass@1, Pass@4, Pass@8, and Pass@16 aggregation.
+Add `--dry-run` to any `auto_lm/run.py` command to inspect the resolved configuration without starting Ray.
+The [auto-LM guide](auto_lm/README.md) provides the training-file checksum, evaluation-file layout, and remaining protocol details.
